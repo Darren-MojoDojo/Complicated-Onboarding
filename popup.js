@@ -27,6 +27,7 @@ let emptyMessage = '— loading —';
 let currentProjectID = null;
 let currentProjectName = '';
 let currentOrgName = '';
+let isRestoring = false;
 
 const taskKey = (s) => `${s.entityType}:${s.entityId}:${s.organizationID}`;
 
@@ -34,34 +35,6 @@ const normalize = (entityType, entityId, organizationID, name, org, project) => 
   entityType, entityId, organizationID, name, org, project,
   _search: `${org} ${project} ${name}`.toLowerCase()
 });
-
-function buildCreateRow() {
-  const row = document.createElement('div');
-  row.className = 'create-row';
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.placeholder = '+ New task title…';
-  const btn = document.createElement('button');
-  btn.textContent = 'Create';
-  const submit = async () => {
-    const title = input.value.trim();
-    if (!title || !currentProjectID) return;
-    btn.disabled = true;
-    input.disabled = true;
-    try {
-      await createTaskInCurrentProject(title);
-    } catch (err) {
-      log('Failed to create task: ' + err.message);
-      btn.disabled = false;
-      input.disabled = false;
-      input.focus();
-    }
-  };
-  btn.addEventListener('click', submit);
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
-  row.append(input, btn);
-  return row;
-}
 
 async function createTaskInCurrentProject(title) {
   const data = await gql(
@@ -75,6 +48,7 @@ async function createTaskInCurrentProject(title) {
   const newTask = normalize('tasks', t.id, t.organizationID, t.title, currentOrgName, currentProjectName);
   currentTasks = [newTask, ...currentTasks].sort((a, b) => a.name.localeCompare(b.name));
   selectedTaskKey = taskKey(newTask);
+  persistFormState({ selectedTaskKey });
   renderTasks($('taskSearch').value);
   log(`Created task: ${t.title}`);
 }
@@ -85,7 +59,7 @@ function renderTasks(filter) {
   const tokens = q.split(/\s+/).filter(Boolean);
   list.innerHTML = '';
 
-  if (currentProjectID) list.appendChild(buildCreateRow());
+  $('createTaskBtn').hidden = !currentProjectID;
 
   const matches = currentTasks.filter(s => tokens.every(t => s._search.includes(t)));
 
@@ -94,11 +68,13 @@ function renderTasks(filter) {
     empty.className = 'empty';
     empty.textContent = currentTasks.length ? '— no matches —' : emptyMessage;
     list.appendChild(empty);
+    updateSelectedTaskDisplay();
     return;
   }
 
-  if (!matches.some(s => taskKey(s) === selectedTaskKey)) {
+  if (!isRestoring && !matches.some(s => taskKey(s) === selectedTaskKey)) {
     selectedTaskKey = taskKey(matches[0]);
+    persistFormState({ selectedTaskKey });
   }
 
   for (const s of matches) {
@@ -120,17 +96,39 @@ function renderTasks(filter) {
 
     item.addEventListener('click', () => {
       selectedTaskKey = key;
+      persistFormState({ selectedTaskKey: key });
       for (const el of list.querySelectorAll('.item.selected')) el.classList.remove('selected');
       item.classList.add('selected');
+      updateSelectedTaskDisplay();
     });
     list.appendChild(item);
   }
+  updateSelectedTaskDisplay();
 }
 
 function getSelectedTask() {
   const s = currentTasks.find(t => taskKey(t) === selectedTaskKey);
   if (!s) throw new Error('Pick a task first');
   return { entityType: s.entityType, entityId: s.entityId, organizationID: s.organizationID };
+}
+
+function updateSelectedTaskDisplay() {
+  const el = $('selectedTask');
+  el.innerHTML = '';
+  const s = currentTasks.find(t => taskKey(t) === selectedTaskKey);
+  if (!s) {
+    el.classList.add('empty');
+    el.textContent = '— no task selected —';
+    return;
+  }
+  el.classList.remove('empty');
+  const name = document.createElement('div');
+  name.className = 'name';
+  name.textContent = s.name;
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = `${s.org} / ${s.project}`;
+  el.append(name, meta);
 }
 
 function populateOrgDropdown() {
@@ -173,38 +171,99 @@ async function loadTasks() {
 }
 $('taskSearch').addEventListener('input', (e) => renderTasks(e.target.value));
 
+async function createFromSearch() {
+  const title = $('taskSearch').value.trim();
+  if (!title || !currentProjectID) return;
+  const btn = $('createTaskBtn');
+  btn.disabled = true;
+  try {
+    await createTaskInCurrentProject(title);
+    $('taskSearch').value = '';
+    persistFormState({ taskSearch: '' });
+    renderTasks('');
+  } catch (err) {
+    log('Failed to create task: ' + err.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$('createTaskBtn').addEventListener('click', createFromSearch);
+$('taskSearch').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && currentProjectID) {
+    e.preventDefault();
+    createFromSearch();
+  }
+});
+
 $('settingsBtn').addEventListener('click', () => $('settingsModal').showModal());
 $('settingsModal').addEventListener('click', (e) => {
   if (e.target === $('settingsModal')) $('settingsModal').close();
 });
 
 const SETTINGS_KEYS = ['tenant', 'batch', 'splitMinutes'];
+const FORM_FIELDS = { date: 'value', hours: 'value', mins: 'value', taskSearch: 'value', billable: 'checked' };
+const FORM_KEYS = [...Object.keys(FORM_FIELDS), 'selectedOrgId', 'selectedProjectId', 'selectedTaskKey'];
+
+async function loadStored(keys) {
+  if (!chrome?.storage?.local) return {};
+  return await chrome.storage.local.get(keys);
+}
+
+function persistFormState(obj) {
+  if (!chrome?.storage?.local) return;
+  chrome.storage.local.set(obj);
+}
 
 async function loadSettings() {
-  if (!chrome?.storage?.local) return;
-  const stored = await chrome.storage.local.get(SETTINGS_KEYS);
+  const stored = await loadStored(SETTINGS_KEYS);
   for (const key of SETTINGS_KEYS) {
     const v = stored[key];
     if (v !== undefined && v !== '') $(key).value = v;
   }
 }
 
-function persistSetting(key) {
-  if (!chrome?.storage?.local) return;
-  chrome.storage.local.set({ [key]: $(key).value });
+for (const key of SETTINGS_KEYS) {
+  $(key).addEventListener('input', () => persistFormState({ [key]: $(key).value }));
 }
 
-for (const key of SETTINGS_KEYS) {
-  $(key).addEventListener('input', () => persistSetting(key));
+for (const [id, prop] of Object.entries(FORM_FIELDS)) {
+  const el = $(id);
+  const event = prop === 'checked' ? 'change' : 'input';
+  el.addEventListener(event, () => persistFormState({ [id]: el[prop] }));
 }
 
 (async () => {
   await loadSettings();
-  loadTasks();
+  const formState = await loadStored(FORM_KEYS);
+  isRestoring = true;
+  try {
+    for (const [id, prop] of Object.entries(FORM_FIELDS)) {
+      if (formState[id] !== undefined) $(id)[prop] = formState[id];
+    }
+    if (formState.selectedTaskKey) selectedTaskKey = formState.selectedTaskKey;
+
+    await loadTasks();
+
+    if (formState.selectedOrgId) {
+      $('org').value = formState.selectedOrgId;
+      if ($('org').value === formState.selectedOrgId) {
+        await selectOrg(formState.selectedOrgId);
+        if (formState.selectedProjectId) {
+          $('project').value = formState.selectedProjectId;
+          if ($('project').value === formState.selectedProjectId) {
+            await selectProject(formState.selectedProjectId);
+          }
+        }
+      }
+    }
+  } finally {
+    isRestoring = false;
+  }
+  renderTasks($('taskSearch').value);
 })();
 
-$('org').addEventListener('change', async (e) => {
-  const orgId = e.target.value;
+async function selectOrg(orgId) {
   const projSel = $('project');
   currentProjectID = null;
   if (!orgId) {
@@ -247,10 +306,9 @@ $('org').addEventListener('change', async (e) => {
     projSel.innerHTML = '<option value="">— error —</option>';
     log('Failed to load projects: ' + err.message);
   }
-});
+}
 
-$('project').addEventListener('change', async (e) => {
-  const projectID = e.target.value;
+async function selectProject(projectID) {
   if (!projectID) {
     currentProjectID = null;
     currentTasks = [];
@@ -258,9 +316,10 @@ $('project').addEventListener('change', async (e) => {
     renderTasks($('taskSearch').value);
     return;
   }
-  const projectName = e.target.options[e.target.selectedIndex].textContent;
+  const projSel = $('project');
+  const projectName = projSel.options[projSel.selectedIndex]?.textContent || '';
   const orgSel = $('org');
-  const orgName = orgSel.options[orgSel.selectedIndex].textContent;
+  const orgName = orgSel.options[orgSel.selectedIndex]?.textContent || '';
   currentProjectID = projectID;
   currentProjectName = projectName;
   currentOrgName = orgName;
@@ -288,6 +347,18 @@ $('project').addEventListener('change', async (e) => {
     renderTasks($('taskSearch').value);
     log('Failed to load project tasks: ' + err.message);
   }
+}
+
+$('org').addEventListener('change', async (e) => {
+  const orgId = e.target.value;
+  persistFormState({ selectedOrgId: orgId, selectedProjectId: '', selectedTaskKey: '' });
+  await selectOrg(orgId);
+});
+
+$('project').addEventListener('change', async (e) => {
+  const projectID = e.target.value;
+  persistFormState({ selectedProjectId: projectID, selectedTaskKey: '' });
+  await selectProject(projectID);
 });
 
 $('go').addEventListener('click', async () => {

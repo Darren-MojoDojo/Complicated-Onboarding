@@ -17,10 +17,15 @@
   .tasklist .item .name { font-weight:600; }
   .tasklist .item .meta { font-size:11px; color:#666; margin-top:2px; }
   .tasklist .empty { padding:8px; color:#888; font-style:italic; text-align:center; }
-  .tasklist .create-row { display:flex; gap:6px; align-items:center; padding:6px 8px; border-bottom:1px solid #e5e5e7; background:#f9f9fb; }
-  .tasklist .create-row input { flex:1; padding:4px 6px; margin:0; font-size:12px; box-sizing:border-box; }
-  .tasklist .create-row button { width:auto; padding:4px 10px; margin:0; font-size:12px; background:#635bff; color:#fff; border:0; border-radius:3px; cursor:pointer; }
-  .tasklist .create-row button:disabled { opacity:.5; cursor:not-allowed; }
+  .selected-task { margin-top:4px; padding:6px 8px; background:#635bff; color:#fff; border-radius:4px; font-weight:400; line-height:1.35; overflow-wrap:anywhere; }
+  .selected-task.empty { background:#f5f5f7; color:#888; font-style:italic; }
+  .selected-task .name { font-weight:600; }
+  .selected-task .meta { font-size:11px; opacity:.85; margin-top:2px; }
+  .search-row { display:flex; gap:6px; align-items:stretch; margin-top:4px; }
+  .search-row #taskSearch { flex:1; margin-top:0; }
+  #createTaskBtn { width:auto; flex:0 0 auto; padding:6px 12px; margin-top:0; background:#635bff; color:#fff; border:0; border-radius:4px; cursor:pointer; font-size:12px; }
+  #createTaskBtn:disabled { opacity:.5; cursor:not-allowed; }
+  #createTaskBtn[hidden] { display:none; }
   #billable {width: unset;}
   .blud { display:flex; flex-direction:row; gap:8px; align-items:stretch; margin-top:12px; }
   .blud #go { flex:1; margin-top:0; }
@@ -42,7 +47,11 @@
     <select id="project" disabled><option value="">— pick an organization —</option></select>
   </label>
   <label>Task
-    <input id="taskSearch" type="search" placeholder="Search tasks…" autocomplete="off" />
+    <div id="selectedTask" class="selected-task empty">— no task selected —</div>
+    <div class="search-row">
+      <input id="taskSearch" type="search" placeholder="Search tasks…" autocomplete="off" />
+      <button id="createTaskBtn" type="button" hidden>Create</button>
+    </div>
     <div id="task" class="tasklist" role="listbox" tabindex="0"><div class="empty">— loading —</div></div>
   </label>
   <label>Date (YYYY-MM-DD)
